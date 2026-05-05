@@ -1,8 +1,21 @@
-# 🤖 Resume Screening Multi-Agent System
+# 🤖 Resume Screening Multi-Agent System v2.0
 
 An intelligent resume screening pipeline built with **CrewAI**, **LangChain**, and **Groq (Llama 3 70B)**. Four specialised AI agents collaborate to analyse a job description, parse a resume, score the candidate, and produce a hiring report — automatically.
 
-> Built as part of a hands-on learning project to understand multi-agent orchestration, agentic AI design patterns, and LLM hallucination prevention in production pipelines.
+> Built as a hands-on learning project to understand multi-agent orchestration, agentic AI design patterns, LLM hallucination prevention, and LLMOps evaluation in production pipelines.
+
+---
+
+## 🆕 What's New in v2.0
+
+| Feature | v1.0 | v2.0 |
+|---|---|---|
+| Resume screening | Single resume | Batch up to 10 resumes |
+| Candidate ranking | Manual | Auto-ranked leaderboard |
+| Output quality | No check | RAGAS evaluation on every run |
+| Hallucination detection | None | Faithfulness + risk badge 🟢🟡🔴 |
+| Run history | None | Persisted JSON audit trail |
+| UI | 1 tab | 3 tabs (Single / Batch / History) |
 
 ---
 
@@ -43,10 +56,10 @@ An intelligent resume screening pipeline built with **CrewAI**, **LangChain**, a
           └────────────┬───────────┘
                        │
                        ▼
-          ┌────────────────────────┐
-          │     Final Output       │
-          │  Hiring Report (txt)   │
-          └────────────────────────┘
+          ┌────────────────────────┐        ┌─────────────────┐
+          │     Final Output       │───────▶│  RAGAS Quality  │
+          │  Hiring Report (txt)   │        │  Evaluation     │
+          └────────────────────────┘        └─────────────────┘
 ```
 
 Each agent receives **explicit context** from all upstream agents — preventing LLM hallucination across agent boundaries.
@@ -74,6 +87,20 @@ Each agent receives **explicit context** from all upstream agents — preventing
 
 ---
 
+## 🧪 RAGAS Evaluation
+
+Every run is automatically evaluated for output quality:
+
+| Metric | What it checks | Catches |
+|---|---|---|
+| **Faithfulness** | Did agent use actual input data? | Hallucination |
+| **Answer Relevancy** | Did output answer the task? | Off-topic outputs |
+| **Hallucination Risk** | 🟢 LOW / 🟡 MEDIUM / 🔴 HIGH | Context grounding failures |
+
+> In v1.0 the scorer hallucinated a fictional candidate "Rachel Lee" instead of using the actual resume. RAGAS catches this with a low faithfulness score and 🔴 HIGH risk flag.
+
+---
+
 ## ⚙️ Tech Stack
 
 | Tool | Purpose |
@@ -81,9 +108,12 @@ Each agent receives **explicit context** from all upstream agents — preventing
 | **CrewAI** | Multi-agent orchestration framework |
 | **Groq + Llama 3 70B** | Free, fast LLM inference (no OpenAI key needed) |
 | **LiteLLM** | LLM provider abstraction layer |
-| **LangChain** | Underlying LLM tooling used by CrewAI |
+| **LangChain** | Underlying LLM tooling used by CrewAI + RAGAS |
+| **RAGAS** | LLM output evaluation framework |
+| **FastEmbed** | Lightweight local embeddings (no torchvision needed) |
 | **PyMuPDF** | PDF text extraction |
-| **Streamlit** | Browser-based UI |
+| **Streamlit** | Browser-based 3-tab UI |
+| **Pandas** | Batch results leaderboard table |
 | **Python 3.10+** | Core language |
 
 ---
@@ -92,8 +122,8 @@ Each agent receives **explicit context** from all upstream agents — preventing
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/your-username/resume-screening-agent
-cd resume-screening-agent
+git clone https://github.com/meghapswamy/Resume-Screening-Multi-Agent-System
+cd Resume-Screening-Multi-Agent-System
 ```
 
 ### 2. Create virtual environment
@@ -123,13 +153,13 @@ Get your **free** Groq API key at 👉 https://console.groq.com
 
 ### 5. Run
 
-**Option A — Streamlit UI (recommended)**
+**Streamlit UI (recommended)**
 ```bash
 streamlit run app.py
 ```
 Opens at `http://localhost:8501`
 
-**Option B — Terminal**
+**Terminal**
 ```bash
 # With a PDF resume
 python main.py path/to/resume.pdf
@@ -143,7 +173,7 @@ python main.py
 ## 📁 Project Structure
 
 ```
-resume-screening-agent/
+Resume-Screening-Multi-Agent-System/
 │
 ├── agents/
 │   ├── jd_analyst.py        # Agent 1 — JD extraction
@@ -152,17 +182,22 @@ resume-screening-agent/
 │   └── report_writer.py     # Agent 4 — report generation
 │
 ├── tasks/
-│   ├── jd_task.py           # Task for Agent 1
-│   ├── resume_task.py       # Task for Agent 2
-│   ├── scorer_task.py       # Task for Agent 3 (explicit context injection)
-│   └── report_task.py       # Task for Agent 4 (explicit context injection)
+│   ├── jd_task.py
+│   ├── resume_task.py
+│   ├── scorer_task.py       # explicit context injection
+│   └── report_task.py       # explicit context injection
 │
 ├── tools/
-│   └── pdf_reader.py        # PDF text extraction utility (PyMuPDF)
+│   ├── pdf_reader.py        # PDF extraction (PyMuPDF)
+│   └── ragas_evaluator.py   # RAGAS quality evaluation
 │
-├── app.py                   # Streamlit UI
+├── results/                 # Auto-saved JSON run history
+│   └── .gitkeep
+│
+├── app.py                   # Streamlit UI (3 tabs)
+├── batch_runner.py          # Batch screening logic
 ├── main.py                  # Terminal entry point
-├── .env                     # API keys — never commit this
+├── .env                     # API keys — never committed
 ├── .gitignore
 ├── requirements.txt
 └── README.md
@@ -173,28 +208,37 @@ resume-screening-agent/
 ## 💡 Key Engineering Decisions
 
 ### 1. Explicit context injection over implicit passing
-CrewAI passes outputs implicitly in sequential mode, but this caused the scorer to hallucinate a fictional candidate ("Rachel Lee") instead of using actual upstream outputs. Fixing this required explicitly passing `context=[jd_task, resume_task]` to downstream agents — a real production failure mode and its fix.
+CrewAI passes outputs implicitly in sequential mode, but this caused the scorer to hallucinate a fictional candidate ("Rachel Lee") instead of using actual upstream outputs. Fix: explicitly passing `context=[jd_task, resume_task]` to downstream agents.
 
-### 2. LiteLLM for provider abstraction
-Instead of hardcoding OpenAI, we use LiteLLM's routing string (`groq/llama3-70b-8192`). Swapping providers requires changing one environment variable — no code changes.
+### 2. RAGAS before batch scaling
+Evaluation infrastructure was built before scaling to batch. Running 10 unvalidated LLM outputs is 10× the hallucination risk. Evaluation first, scale second.
 
-### 3. Separation of analysis and presentation
-Agents 1–3 are analytical (extract, parse, score). Agent 4 is a communication agent (present). This separation keeps each agent's scope clean and outputs more reliable.
+### 3. Sequential batch over parallel execution
+Groq free tier has rate limits (~30 requests/minute). Sequential execution with configurable delay keeps us safely under the limit. In production with a paid tier: `asyncio` with a `Semaphore` to cap concurrency.
 
-### 4. Gap extraction in resume parsing
-The Resume Parser explicitly surfaces missing skills in a "GAPS" section rather than leaving absence detection to the Scorer. This prevents a known LLM failure mode where absence of information is not correctly inferred.
+### 4. FastEmbed over sentence-transformers
+FastEmbed is 10× lighter, has no `torchvision` dependency, and provides the same embedding quality for evaluation tasks. `sentence-transformers` caused import errors due to bundled computer vision model dependencies.
+
+### 5. `task.output.raw` for intermediate capture
+After `crew.kickoff()`, every task stores its output in `.output.raw`. This allows RAGAS to access intermediate agent outputs without any changes to agent or task code.
+
+### 6. Separation of analysis and presentation
+Agents 1–3 are analytical (extract, parse, score). Agent 4 is a communication agent (present). This keeps each agent's scope clean and outputs more reliable.
 
 ---
 
 ## 🔮 Roadmap
 
-- [ ] RAGAS evaluation — automated hallucination detection on agent outputs
-- [ ] Batch screening — upload 5–10 resumes, auto-rank all candidates  
-- [ ] Multiple JD support — match one resume against several roles
+- [x] 4-agent multi-agent pipeline (CrewAI)
+- [x] Streamlit UI
+- [x] RAGAS evaluation — automated hallucination detection
+- [x] Batch screening — upload up to 10 resumes, auto-rank candidates
+- [x] Run history — persisted JSON audit trail
 - [ ] MLflow experiment tracking — log runs, compare prompt versions
-- [ ] LangGraph rewrite — conditional flows (e.g. second-opinion agent if score < 50)
+- [ ] LangGraph rewrite — conditional flows (second-opinion agent if score < 50)
 - [ ] Bias detection agent — audit scorecard for non-skill correlations
 - [ ] Export report as PDF
+- [ ] Deploy on Streamlit Cloud
 
 ---
 
@@ -205,12 +249,12 @@ The Resume Parser explicitly surfaces missing skills in a "GAPS" section rather 
 | Multi-agent orchestration | 4-agent CrewAI sequential pipeline |
 | Explicit context injection | `context=[...]` in scorer + report tasks |
 | LLM hallucination prevention | Context grounding fix in scorer task |
-| Sequential process design | `Process.sequential` — assembly line pattern |
+| LLMOps evaluation | RAGAS faithfulness + answer relevancy |
+| Batch pipeline design | Sequential execution with rate-limit protection |
 | LiteLLM provider routing | `groq/llama3-70b-8192` model string |
-| Role-based agent design | Each agent: single responsibility, clear scope |
-| PDF input handling | PyMuPDF extraction with temp file cleanup |
+| Lightweight embeddings | FastEmbed over sentence-transformers |
+| Run persistence | JSON audit trail per run |
 | Production vs dev mode | `verbose=False` in UI, `True` in terminal |
-| Dependency management | Pinned top-level, transitive resolved by framework |
 
 ---
 
@@ -218,5 +262,7 @@ The Resume Parser explicitly surfaces missing skills in a "GAPS" section rather 
 
 - [CrewAI](https://docs.crewai.com) — multi-agent framework
 - [Groq](https://console.groq.com) — free LLM inference
-- [LiteLLM](https://docs.litellm.ai) — provider abstraction
+- [RAGAS](https://docs.ragas.io) — LLM evaluation framework
+- [FastEmbed](https://github.com/qdrant/fastembed) — lightweight embeddings
 - [Streamlit](https://streamlit.io) — UI framework
+- [LiteLLM](https://docs.litellm.ai) — provider abstraction
